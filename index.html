@@ -3,12 +3,462 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Your Page Title</title>
+    <title>Neon Strike TD</title>
+    <style>
+        body { background: #111; color: #eee; font-family: 'Segoe UI', sans-serif; margin: 0; display: flex; overflow: hidden; }
+        #game-container { position: relative; display: flex; width: 100vw; height: 100vh; }
+        canvas { background: #000; cursor: crosshair; flex-grow: 1; }
+        
+        #sidebar { width: 300px; background: #222; border-left: 2px solid #444; padding: 10px; display: flex; flex-direction: column; overflow-y: auto; }
+        .stats { font-size: 1.2rem; font-weight: bold; margin-bottom: 10px; color: #0f0; }
+        
+        .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; }
+        .unit-card { background: #333; border: 1px solid #555; padding: 5px; cursor: pointer; text-align: center; font-size: 0.8rem; transition: 0.2s; }
+        .unit-card:hover { background: #444; border-color: #0ff; }
+        .unit-card.selected { border-color: #ff0; background: #442; }
+
+        #upgrade-panel { margin-top: 15px; padding: 10px; border-top: 2px solid #444; display: none; }
+        .up-btn { width: 100%; margin: 5px 0; padding: 8px; cursor: pointer; background: #256; color: white; border: none; font-size: 0.8rem; }
+        .up-btn:disabled { background: #444; cursor: not-allowed; }
+
+        #controls { margin-top: auto; padding-top: 10px; }
+        .speed-btn { padding: 5px 10px; margin: 2px; background: #444; color: white; border: 1px solid #666; cursor: pointer; }
+        .speed-btn.active { background: #08f; }
+
+        #menu-overlay { position: absolute; inset: 0; background: rgba(0,0,0,0.9); display: flex; flex-direction: column; align-items: center; justify-content: center; z-index: 100; }
+        select, button.start-btn { padding: 10px 20px; margin: 10px; font-size: 1.1rem; cursor: pointer; }
+    </style>
 </head>
 <body>
 
-    <h1>Welcome to My Website</h1>
-    <p>This is where your visible content goes.</p>
+<div id="game-container">
+    <canvas id="gameCanvas"></canvas>
 
+    <div id="sidebar">
+        <div class="stats">
+            $<span id="money">100</span> | ❤️ <span id="lives">100</span><br>
+            Wave: <span id="wave">0</span>
+        </div>
+
+        <div class="grid" id="unit-shop"></div>
+
+        <div id="upgrade-panel">
+            <h3 id="selected-name">Unit</h3>
+            <button class="up-btn" id="up-path-1">Path 1 ($0)</button>
+            <button class="up-btn" id="up-path-2">Path 2 ($0)</button>
+            <button class="up-btn" id="sell-btn" style="background:#622">Sell</button>
+        </div>
+
+        <div id="controls">
+            <div id="speed-controls">
+                <button class="speed-btn active" onclick="setSpeed(1)">1x</button>
+                <button class="speed-btn" onclick="setSpeed(3)">3x</button>
+                <button class="speed-btn" onclick="setSpeed(4)">4x</button>
+                <button class="speed-btn" onclick="setSpeed(5)">5x</button>
+            </div>
+            <button class="start-btn" id="next-wave-btn" style="width:100%">START WAVE</button>
+        </div>
+    </div>
+</div>
+
+<div id="menu-overlay">
+    <h1 style="color:#0ff; text-shadow: 0 0 10px #0ff;">NEON STRIKE TD</h1>
+    <label>Select Track:</label>
+    <select id="track-select">
+        <option value="neon">Neon Circuit (Easy)</option>
+        <option value="zigzag">Zig-Zag (Medium)</option>
+        <option value="loop">The Loop (Hard)</option>
+        <option value="spiral">Cyber Spiral (Hard)</option>
+        <option value="cross">The Crossing (Nightmare)</option>
+        <option value="chaos">Chaos (Nightmare)</option>
+    </select>
+    <label>Select Difficulty:</label>
+    <select id="diff-select">
+        <option value="1">Easy (1.0x HP)</option>
+        <option value="1.5">Medium (1.5x HP)</option>
+        <option value="2.5">Hard (2.5x HP)</option>
+        <option value="5">Nightmare (5.0x HP)</option>
+    </select>
+    <button class="start-btn" onclick="startGame()">ENTER THE GRID</button>
+</div>
+
+<script>
+/** * GAME CONFIGURATION 
+ */
+const canvas = document.getElementById('gameCanvas');
+const ctx = canvas.getContext('2d');
+const unitShop = document.getElementById('unit-shop');
+
+let money = 100;
+let lives = 100;
+let wave = 0;
+let gameActive = false;
+let gameSpeed = 1;
+let selectedUnitType = null;
+let placedTowers = [];
+let balloons = [];
+let projectiles = [];
+let selectedPlacedTower = null;
+let currentTrack = [];
+let difficultyMult = 1;
+
+// Unit Data
+const UNIT_TYPES = [
+    { name: "Sentry", cost: 50, range: 100, damage: 1, rate: 60, color: "#fff", p1: "Rapid Fire", p2: "Long Range" },
+    { name: "Farmer", cost: 70, range: 50, damage: 0, rate: 300, color: "#0f0", p1: "Bigger Yield", p2: "Investment", isFarm: true },
+    { name: "Sniper", cost: 100, range: 250, damage: 5, rate: 120, color: "#f0f", p1: "Heavy Rounds", p2: "Eagle Eye" },
+    { name: "Pulse", cost: 120, range: 80, damage: 2, rate: 40, color: "#0ff", p1: "Shockwave", p2: "Chain Lightning" },
+    { name: "Burner", cost: 150, range: 90, damage: 1, rate: 10, color: "#f80", p1: "Blue Flame", p2: "Napalm" },
+    { name: "Freezer", cost: 130, range: 100, damage: 0, rate: 80, color: "#88f", p1: "Deep Freeze", p2: "Blizzard" },
+    { name: "Cannon", cost: 200, range: 120, damage: 10, rate: 150, color: "#888", p1: "Cluster", p2: "Atomic" },
+    { name: "Laser", cost: 250, range: 150, damage: 0.2, rate: 1, color: "#f00", p1: "Melt", p2: "Split Beam" },
+    { name: "Ninja", cost: 180, range: 110, damage: 2, rate: 30, color: "#444", p1: "Shuriken Fan", p2: "Execute" },
+    { name: "Tesla", cost: 300, range: 130, damage: 4, rate: 100, color: "#ff0", p1: "High Volt", p2: "Global Reach" },
+    { name: "Void", cost: 500, range: 150, damage: 20, rate: 200, color: "#a0f", p1: "Black Hole", p2: "Corruption" },
+    { name: "Titan", cost: 1000, range: 200, damage: 50, rate: 250, color: "#fff", p1: "God Mode", p2: "Mega Beam" }
+];
+
+const TRACKS = {
+    neon: [{x:0,y:250}, {x:200,y:250}, {x:200,y:100}, {x:500,y:100}, {x:500,y:400}, {x:800,y:400}],
+    zigzag: [{x:0,y:50}, {x:700,y:100}, {x:100,y:200}, {x:700,y:300}, {x:100,y:400}, {x:800,y:500}],
+    loop: [{x:0,y:300}, {x:400,y:300}, {x:400,y:100}, {x:100,y:100}, {x:100,y:500}, {x:700,y:500}, {x:700,y:100}, {x:800,y:100}],
+    spiral: [{x:400,y:0}, {x:400,y:400}, {x:100,y:400}, {x:100,y:100}, {x:600,y:100}, {x:600,y:500}, {x:0,y:500}],
+    cross: [{x:400,y:0}, {x:400,y:600}, {x:0,y:300}, {x:800,y:300}],
+    chaos: [{x:0,y:0}, {x:800,y:600}, {x:800,y:0}, {x:0,y:600}]
+};
+
+/**
+ * INITIALIZATION
+ */
+function init() {
+    canvas.width = 800;
+    canvas.height = 600;
+    
+    UNIT_TYPES.forEach((type, index) => {
+        const card = document.createElement('div');
+        card.className = 'unit-card';
+        card.innerHTML = `<strong>${type.name}</strong><br>$${type.cost}`;
+        card.onclick = () => selectUnitType(index);
+        unitShop.appendChild(card);
+    });
+
+    canvas.addEventListener('click', handleCanvasClick);
+    document.getElementById('next-wave-btn').onclick = startWave;
+    requestAnimationFrame(gameLoop);
+}
+
+function startGame() {
+    const trackKey = document.getElementById('track-select').value;
+    currentTrack = TRACKS[trackKey];
+    difficultyMult = parseFloat(document.getElementById('diff-select').value);
+    document.getElementById('menu-overlay').style.display = 'none';
+    gameActive = true;
+    money = 100;
+    lives = 100;
+    updateUI();
+}
+
+/**
+ * CORE LOGIC
+ */
+function gameLoop() {
+    if (gameActive) {
+        ctx.clearRect(0,0, canvas.width, canvas.height);
+        drawTrack();
+        
+        for (let i = 0; i < gameSpeed; i++) {
+            updateBalloons();
+            updateTowers();
+            updateProjectiles();
+        }
+
+        drawTowers();
+        drawBalloons();
+        drawProjectiles();
+        
+        if (lives <= 0) {
+            alert("Game Over! Wave: " + wave);
+            location.reload();
+            gameActive = false;
+        }
+    }
+    requestAnimationFrame(gameLoop);
+}
+
+function drawTrack() {
+    ctx.strokeStyle = "#333";
+    ctx.lineWidth = 40;
+    ctx.beginPath();
+    ctx.moveTo(currentTrack[0].x, currentTrack[0].y);
+    for(let p of currentTrack) ctx.lineTo(p.x, p.y);
+    ctx.stroke();
+
+    // Neon glow
+    ctx.strokeStyle = "#0ff";
+    ctx.lineWidth = 2;
+    ctx.stroke();
+}
+
+function updateBalloons() {
+    balloons.forEach((b, index) => {
+        let target = currentTrack[b.pathIndex];
+        let dx = target.x - b.x;
+        let dy = target.y - b.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+
+        if (dist < 2) {
+            b.pathIndex++;
+            if (b.pathIndex >= currentTrack.length) {
+                lives -= b.rank;
+                balloons.splice(index, 1);
+                updateUI();
+                return;
+            }
+        }
+
+        b.x += (dx/dist) * b.speed;
+        b.y += (dy/dist) * b.speed;
+    });
+}
+
+function updateTowers() {
+    placedTowers.forEach(t => {
+        t.cooldown--;
+
+        if (t.isFarm) {
+            if (t.cooldown <= 0) {
+                money += (t.p1Lvl * 20) + 20;
+                t.cooldown = t.rate;
+                updateUI();
+            }
+            return;
+        }
+
+        if (t.cooldown <= 0) {
+            let target = null;
+            let minDist = t.range;
+            
+            balloons.forEach(b => {
+                let d = Math.sqrt((t.x-b.x)**2 + (t.y-b.y)**2);
+                if (d < minDist) {
+                    target = b;
+                    if (t.name !== "Laser") minDist = d; // Laser locks on
+                }
+            });
+
+            if (target) {
+                if (t.name === "Laser") {
+                    target.hp -= t.damage;
+                    ctx.strokeStyle = t.color;
+                    ctx.beginPath();
+                    ctx.moveTo(t.x, t.y);
+                    ctx.lineTo(target.x, target.y);
+                    ctx.stroke();
+                } else {
+                    projectiles.push({
+                        x: t.x, y: t.y, target: target, 
+                        speed: 7, damage: t.damage, color: t.color,
+                        radius: t.p1Lvl > 0 && t.name === "Cannon" ? 40 : 0
+                    });
+                }
+                t.cooldown = t.rate;
+            }
+        }
+    });
+}
+
+function updateProjectiles() {
+    projectiles.forEach((p, index) => {
+        let dx = p.target.x - p.x;
+        let dy = p.target.y - p.y;
+        let dist = Math.sqrt(dx*dx + dy*dy);
+
+        if (dist < 5 || !balloons.includes(p.target)) {
+            if (balloons.includes(p.target)) {
+                p.target.hp -= p.damage;
+                // Splash damage for path 1 cannon
+                if (p.radius > 0) {
+                    balloons.forEach(b => {
+                        let d = Math.sqrt((p.x-b.x)**2 + (p.y-b.y)**2);
+                        if (d < p.radius) b.hp -= p.damage/2;
+                    });
+                }
+            }
+            projectiles.splice(index, 1);
+        } else {
+            p.x += (dx/dist) * p.speed;
+            p.y += (dy/dist) * p.speed;
+        }
+    });
+
+    // Cleanup dead balloons
+    balloons = balloons.filter(b => {
+        if (b.hp <= 0) {
+            money += 2;
+            updateUI();
+            return false;
+        }
+        return true;
+    });
+}
+
+/**
+ * UI & INTERACTION
+ */
+function handleCanvasClick(e) {
+    const rect = canvas.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Check if clicking existing tower
+    let clickedTower = placedTowers.find(t => Math.sqrt((t.x-x)**2 + (t.y-y)**2) < 20);
+    if (clickedTower) {
+        selectedPlacedTower = clickedTower;
+        showUpgradePanel();
+        return;
+    }
+
+    if (selectedUnitType !== null) {
+        const type = UNIT_TYPES[selectedUnitType];
+        if (money >= type.cost) {
+            money -= type.cost;
+            placedTowers.push({
+                ...type, x, y, 
+                p1Lvl: 0, p2Lvl: 0, 
+                cooldown: 0,
+                originalRange: type.range
+            });
+            updateUI();
+        }
+    }
+}
+
+function showUpgradePanel() {
+    const t = selectedPlacedTower;
+    const panel = document.getElementById('upgrade-panel');
+    panel.style.display = 'block';
+    document.getElementById('selected-name').innerText = t.name;
+    
+    const p1Cost = (t.p1Lvl + 1) * 100;
+    const p2Cost = (t.p2Lvl + 1) * 100;
+    
+    const btn1 = document.getElementById('up-path-1');
+    const btn2 = document.getElementById('up-path-2');
+    
+    btn1.innerText = `${t.p1} ($${p1Cost})`;
+    btn2.innerText = `${t.p2} ($${p2Cost})`;
+    
+    btn1.onclick = () => upgrade(1, p1Cost);
+    btn2.onclick = () => upgrade(2, p2Cost);
+    
+    document.getElementById('sell-btn').onclick = () => {
+        money += 50;
+        placedTowers = placedTowers.filter(pt => pt !== t);
+        panel.style.display = 'none';
+        updateUI();
+    };
+}
+
+function upgrade(path, cost) {
+    if (money >= cost) {
+        money -= cost;
+        const t = selectedPlacedTower;
+        if (path === 1) {
+            t.p1Lvl++;
+            if (t.isFarm) t.rate *= 0.8;
+            else t.rate *= 0.7;
+            t.damage *= 1.5;
+        } else {
+            t.p2Lvl++;
+            t.range += 50;
+        }
+        updateUI();
+        showUpgradePanel();
+    }
+}
+
+function selectUnitType(idx) {
+    selectedUnitType = idx;
+    document.querySelectorAll('.unit-card').forEach((c, i) => {
+        c.classList.toggle('selected', i === idx);
+    });
+}
+
+function setSpeed(s) {
+    gameSpeed = s;
+    document.querySelectorAll('.speed-btn').forEach(b => {
+        b.classList.toggle('active', parseInt(b.innerText) === s);
+    });
+}
+
+function startWave() {
+    if (balloons.length > 0) return;
+    wave++;
+    updateUI();
+    
+    let count = 5 + wave * 2;
+    let hp = (10 + wave * 5) * difficultyMult;
+    
+    let interval = setInterval(() => {
+        balloons.push({
+            x: currentTrack[0].x,
+            y: currentTrack[0].y,
+            hp: hp,
+            rank: Math.ceil(hp/10),
+            speed: 1.5 + (wave * 0.1),
+            pathIndex: 1
+        });
+        count--;
+        if (count <= 0) clearInterval(interval);
+    }, 500 / gameSpeed);
+}
+
+function updateUI() {
+    document.getElementById('money').innerText = Math.floor(money);
+    document.getElementById('lives').innerText = lives;
+    document.getElementById('wave').innerText = wave;
+}
+
+/**
+ * DRAWING
+ */
+function drawTowers() {
+    placedTowers.forEach(t => {
+        ctx.fillStyle = t.color;
+        ctx.beginPath();
+        ctx.arc(t.x, t.y, 15, 0, Math.PI*2);
+        ctx.fill();
+        
+        if (selectedPlacedTower === t) {
+            ctx.strokeStyle = "rgba(255,255,255,0.3)";
+            ctx.beginPath();
+            ctx.arc(t.x, t.y, t.range, 0, Math.PI*2);
+            ctx.stroke();
+        }
+    });
+}
+
+function drawBalloons() {
+    balloons.forEach(b => {
+        ctx.fillStyle = `hsl(${b.hp * 10}, 70%, 50%)`;
+        ctx.beginPath();
+        ctx.ellipse(b.x, b.y, 10, 13, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.strokeStyle = "#fff";
+        ctx.stroke();
+    });
+}
+
+function drawProjectiles() {
+    projectiles.forEach(p => {
+        ctx.fillStyle = p.color;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 3, 0, Math.PI*2);
+        ctx.fill();
+    });
+}
+
+init();
+</script>
 </body>
 </html>
